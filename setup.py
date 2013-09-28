@@ -4,6 +4,8 @@ from setuptools import setup, find_packages, Command
 import os
 import urllib
 
+import sense
+
 def get_reqs(reqs=["Django>=1.4.0", "python-dateutil"]):
     # optparse is included with Python <= 2.7, but has been deprecated in favor
     # of argparse.  We try to import argparse and if we can't, then we'll add
@@ -33,10 +35,10 @@ class TestCommand(Command):
                 print cmd
                 os.system(cmd)
         os.system('. ./.env/bin/activate; django-admin.py test --pythonpath=. --settings=sense.tests.settings tests; deactivate')
-        
+
 setup(
     name = "django-sense",
-    version = __version__,
+    version = sense.__version__,
     packages = find_packages(),
     author = "Chris Spencer",
     author_email = "chrisspen@gmail.com",
