@@ -1,0 +1,62 @@
+[ 
+{
+    "pk": null, 
+    "model": "sense.word", 
+    "fields": {
+        "updated": "2013-09-18T18:05:21.401Z", 
+        "created": "2013-09-18T17:18:56.592Z", 
+        "deleted": null, 
+        "text": "is a", 
+        "sense_count": 1, 
+        "wiktionary_id": "is-a"
+    }
+},
+{
+    "pk": null, 
+    "model": "sense.sense", 
+    "fields": {
+        "definition": "When used in a triple, implies that the subject is a subclass of the object.\r\n\r\ne.g. New York is a place.\r\n\r\nhttp://en.wikipedia.org/wiki/Is-a", 
+        "updated": "2013-09-18T17:54:57.418Z", 
+        "word": [
+            "is a"
+        ], 
+        "created": "2013-09-18T17:21:41.646Z", 
+        "deleted": null, 
+        "pos": "v", 
+        "_name": "None.predp.is_a.http_en_wikipedia_org_wiki_Is_a", 
+        "source": null, 
+        "examples": [], 
+        "wordnet_id": ""
+    }
+},
+{
+    "pk": null, 
+    "model": "sense.word", 
+    "fields": {
+        "updated": "2013-09-18T18:05:17.593Z", 
+        "created": "2013-09-18T17:29:16.348Z", 
+        "deleted": null, 
+        "text": "has a", 
+        "sense_count": 1, 
+        "wiktionary_id": "has-a"
+    }
+},
+{
+    "pk": null, 
+    "model": "sense.sense", 
+    "fields": {
+        "definition": "When used as a predicate in a triple, implies that the object \"belongs to\" the subject, and also known as the holonym-meronym relationship.\r\n\r\ne.g. A cat has a tail.\r\n\r\nCat is a holonym of tail. And tail is a meronym of cat.\r\n\r\nhttp://en.wikipedia.org/wiki/Has-a", 
+        "updated": "2013-09-18T17:57:59.176Z", 
+        "word": [
+            "has a"
+        ], 
+        "created": "2013-09-18T17:29:16.352Z", 
+        "deleted": null, 
+        "pos": "a", 
+        "_name": "none.predp.has_a.when_used_as_a_predicate_in_a_triple__implies_that", 
+        "source": null, 
+        "examples": [], 
+        "wordnet_id": ""
+    }
+}
+]
