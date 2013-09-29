@@ -7,9 +7,9 @@ from django.utils.safestring import mark_safe
 import admin_steroids
 from admin_steroids import formatters as f
 from admin_steroids.filters import NullListFilter
+from admin_steroids import utils
 
 import models
-import utils
 
 class SourceAdmin(admin.ModelAdmin):
     pass
