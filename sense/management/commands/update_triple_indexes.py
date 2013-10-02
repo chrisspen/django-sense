@@ -47,7 +47,7 @@ class Command(BaseCommand):
             help='The object to start at.'),
         make_option('--depth',
             dest='depth',
-            default=0,
+            default=None,
             help='The starting depth.'),
         make_option('--noseed',
             action='store_true',
@@ -59,6 +59,11 @@ class Command(BaseCommand):
             dest='noupdate',
             default=False,
             help='If given, does update any index records.'),
+        make_option('--nochildren',
+            action='store_true',
+            dest='nochildren',
+            default=False,
+            help='If given, does not seed children.'),
         )
     
     def handle(self, *args, **options):
@@ -66,7 +71,9 @@ class Command(BaseCommand):
         subject = options['subject']
         predicate = options['predicate']
         object = options['object']
-        depth = int(options['depth'])
+        depth = options['depth']
+        if depth is not None:
+            depth = int(depth)
         
         voter = _settings.get_default_person
         if voter:
@@ -76,11 +83,15 @@ class Command(BaseCommand):
 #        django.db.transaction.enter_transaction_management()
 #        django.db.transaction.managed(True)
         
-#        if not options['noseed']:
-#            models.PredicateObjectIndexPending.populate(predicate=predicate)
+        if not options['noseed']:
+            models.PredicateObjectIndexPending.populate(predicate=predicate)
 #        
-#        if not options['noupdate']:
-#            models.PredicateObjectIndex.update_all(predicate=predicate, depth=depth)
+        if not options['noupdate']:
+            models.PredicateObjectIndex.update_all_stale(
+                predicate=predicate,
+                depth=depth,
+                nochildren=options['nochildren'],
+            )
 #        
-        models.PredicateObjectIndex.update_all_best()
+        #models.PredicateObjectIndex.update_all_best()
         

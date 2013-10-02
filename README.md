@@ -6,3 +6,5 @@ Overview
 ========
 
 Allows bulk import of triples based on the data from Wordnet and Conceptnet.
+
+Experimental. Not intended for production use.

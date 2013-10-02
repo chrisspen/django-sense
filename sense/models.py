@@ -1,6 +1,9 @@
 import sys
 import re
 import math
+from collections import namedtuple
+import hashlib
+import cPickle as pickle
 
 from django.conf import settings
 from django.db import models
@@ -13,6 +16,20 @@ import dtree
 
 import constants as c
 import settings as _settings
+
+Constraint = namedtuple('Constraint', ['predicate', 'object', 'polarity'])
+
+def po_to_hash(p, o):
+    """
+    Converts a (predicate, object) tuple into a unique hash.
+    """
+    if not isinstance(p, int):
+        p = p.id
+    if not isinstance(o, int):
+        o = o.id
+    assert isinstance(p, int)
+    assert isinstance(o, int)
+    return hashlib.sha512(pickle.dumps((p, o))).hexdigest()
 
 def print_status(top_percent, sub_percent, message, max_message_length=100, newline=False):
     """
@@ -708,6 +725,8 @@ class Triple(BaseModel):
     
     object = models.ForeignKey(Sense, blank=True, null=True, related_name='object_triples')
     
+    po_hash = models.CharField(max_length=700, blank=True, null=True, db_index=True)
+    
     conceptnet_uri = models.URLField(max_length=700, blank=True, null=True, db_index=True)
     
     conceptnet_weight = models.FloatField(blank=True, null=True)
@@ -869,11 +888,14 @@ class Triple(BaseModel):
         except ValueError:
             self.log_prob = None
         
+        old = Triple.objects.get(id=self.id) if self.id else None
+        if not self.id or not self.po_hash or (self.id and (self.predicate != old.predicate or self.object != old.object)):
+            self.po_hash = po_to_hash(self.predicate, self.object)
+        
         new = False
         if self.id:
             self.total_contexts = self.contexts.all().count()
             
-            old = Triple.objects.get(id=self.id)
             if old.deleted != self.deleted:
                 for ctx in self.contexts.all():
                     ctx.clear_caches()
@@ -972,58 +994,6 @@ class PredicateObjectIndexManager(models.Manager):
     def fresh(self):
         return self.filter(fresh=True)
 
-#class PredicateObjectIndexLink(BaseModel):
-#    
-#    lower = models.ForeignKey(
-#        'PredicateObjectIndex',
-#        related_name='lower_poi_m2m')
-#    
-#    upper = models.ForeignKey(
-#        'PredicateObjectIndex',
-#        related_name='upper_poi_m2m')
-#
-#    entropy = models.FloatField(
-#        blank=True,
-#        null=True,
-#        editable=False,
-#        db_index=True,
-#        help_text='''The entropy measure representing how much the
-#            triple-store would be split using the lower-triple with respect
-#            to the upper-triple.<br/>
-#            A value close to 1.0 indicates a near-perfect split.<br/>
-#            A value close to 0.0 indicates almost no split.''')
-#    
-#    class Meta:
-#        unique_together = (
-#            ('lower', 'upper'),
-#        )
-#        verbose_name = 'predicate object index layer'
-#        verbose_name_plural = 'predicate object index layers'
-#        
-#    def save(self, *args, **kwargs):
-#        
-#        assert self.lower.predicate == self.upper.predicate
-#        
-#        # Note, we can only calculate an inter-POI entropy if the predicate
-#        # implies mutual exclusivity of all matching subjects.
-#        # e.g. If "it" isa cat then "it" can't also be a dog, so we can assume
-#        # that whatever POI isa+cat and isa+dog share is a valid splitting
-#        # criteria that we can calculate entropy for.
-#        # Yet, if "it" has fur then "it" may also have a tail. Even if those
-#        # two POI share a common abstraction, we can't assume one would be
-#        # excluded by the other.
-#        #
-#        if self.lower.predicate.mutually_exclusive_subject_predicate \
-#        and self.lower.subject_count_total and self.upper.subject_count_total:
-#            self.entropy = dtree.entropy(data=dict(
-#                a=self.lower.subject_count_total,
-#                b=self.upper.subject_count_total,
-#            ))
-#        else:
-#            self.entropy = 0
-#        
-#        return super(PredicateObjectIndexLink, self).save(*args, **kwargs)
-    
 class PredicateObjectIndex(BaseModel):
     
     objects = PredicateObjectIndexManager()
@@ -1036,21 +1006,17 @@ class PredicateObjectIndex(BaseModel):
     
     object = models.ForeignKey(Sense, related_name='object_index')
     
-    subject = models.ForeignKey(Sense, related_name='subject_index', blank=True, null=True)
+    po_hash = models.CharField(max_length=700, blank=True, null=True, db_index=True)
     
-    subject_count_direct = models.PositiveIntegerField(
-        blank=True,
-        null=True,
-        db_index=True,
-        help_text='''Count of subjects directly linked to this predicate+object
-            pair.''')
+#    subject = models.ForeignKey(
+#        Sense,
+#        related_name='subject_index',
+#        blank=True,
+#        null=True,
+#        help_text='The subject matched from the parent index.')
     
-    subject_count_total = models.PositiveIntegerField(
-        blank=True,
-        null=True,
-        db_index=True,
-        help_text='''Total count of subjects linked to this predicate+object
-            pair based on any inferences supported by the predicate.''')
+    prior = models.NullBooleanField(
+        help_text='How the user answered the parent node.')
     
     depth = models.PositiveIntegerField(
         blank=True,
@@ -1058,6 +1024,24 @@ class PredicateObjectIndex(BaseModel):
         editable=False,
         db_index=True,
         help_text='This node\'s location in the decision tree. 0=top')
+    
+    fresh = models.BooleanField(
+        default=False,
+        db_index=True)
+    
+#    subject_count_direct = models.PositiveIntegerField(
+#        blank=True,
+#        null=True,
+#        db_index=True,
+#        help_text='''Count of subjects directly linked to this predicate+object
+#            pair.''')
+    
+    subject_count_total = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text='''Total count of subjects linked to this predicate+object
+            pair and all parent pairs.''')
     
     entropy = models.FloatField(
         blank=True,
@@ -1069,12 +1053,11 @@ class PredicateObjectIndex(BaseModel):
             A value close to 1.0 indicates a near-perfect split.<br/>
             A value close to 0.0 indicates almost no split.''')
     
-    fresh = models.BooleanField(
-        default=False,
-        db_index=True)
-    
     best_splitter = models.NullBooleanField(
-        db_index=True)
+        db_index=True,
+        help_text='''If checked, indicates this index has the highest entropy
+            at this node. This will be true for only one and null for
+            everyone else.''')
     
     _triple_ids = models.TextField(blank=True, null=True, db_column='triple_ids')
     
@@ -1095,14 +1078,14 @@ class PredicateObjectIndex(BaseModel):
         verbose_name_plural = 'predicate object indexes'
         ordering = ('-entropy',)
         unique_together = (
-            ('context', 'subject', 'parent', 'predicate', 'object'),
-            ('context', 'subject', 'best_splitter', 'depth'),
+            ('context', 'parent', 'predicate', 'object', 'prior'),
+            ('context', 'parent', 'prior', 'best_splitter'),
         )
         index_together = (
-            ('context', 'parent', 'predicate', 'object', 'subject'),
-            ('context', 'predicate', 'object', 'subject'),
-            ('context', 'parent', 'predicate', 'object'),
-            ('context', 'predicate', 'object'),
+            ('context', 'parent', 'predicate', 'object', 'prior'),
+            ('context', 'predicate', 'object', 'prior'),
+            ('context', 'parent', 'predicate', 'object', 'prior'),
+            ('context', 'predicate', 'object', 'prior'),
         )
 
     def __unicode__(self):
@@ -1110,30 +1093,67 @@ class PredicateObjectIndex(BaseModel):
             self.predicate.conceptnet_predicate,
             self.object.word.text,
         )
+    
+    @property
+    def all_prior_constraints(self):
+        """
+        Returns a list of triple constraints inherited from all parent nodes
+        in the form [Constraint(predicate=?, object=?, polarity=True|False)]
+        """
+        prior = self
+        current = self.parent
+        while 1:
+            if current is None:
+                break
+            yield Constraint(
+                predicate=current.predicate,
+                object=current.object,
+                polarity=prior.prior,
+            )
+            prior = current
+            current = current.parent
 
     def save(self, *args, **kwargs):
         
         if self.parent:
-            self.depth = self.parent.depth
+            self.depth = self.parent.depth + 1
         else:
             self.depth = 0
         
-        if self.id and self.entropy:
-            old = type(self).objects.get(id=self.id)
+        old = type(self).objects.get(id=self.id) if self.id else None
+        if not self.id or not self.po_hash or (self.id and (self.predicate != old.predicate or self.object != old.object)):
+            self.po_hash = po_to_hash(self.predicate, self.object)
+                
+        if self.id:
+            # Check for best splitter by entropy at this node.
+            #TODO:check for parent__isnull=True?
             if self.entropy != old.entropy or self.best_splitter is None:
                 best_entropy = type(self).objects\
-                    .filter(subject=self.subject, depth=self.depth)\
+                    .filter(
+                        context=self.context,
+                        parent=self.parent,
+                        prior=self.prior)\
                     .aggregate(Max('entropy'))['entropy__max']
+#                print 'best_entropy:',best_entropy
+#                print 'entropy:',self.entropy
                 if best_entropy == self.entropy:
-                    PredicateObjectIndex.objects.exclude(id=self.id)\
-                        .filter(subject=self.subject, depth=self.depth)\
+                    PredicateObjectIndex.objects\
+                        .exclude(id=self.id)\
+                        .filter(
+                            context=self.context,
+                            parent=self.parent,
+                            prior=self.prior)\
                         .update(best_splitter=None)
                     self.best_splitter = True
                 else:
                     self.best_splitter = None
+                    
+                if old.best_splitter != self.best_splitter:
+                    self.fresh = False
         
         super(PredicateObjectIndex, self).save(*args, **kwargs)
     
+    #TODO:deprecated?
     @classmethod
     def update_all_best(cls):
         cursor = connection.cursor()
@@ -1156,90 +1176,136 @@ class PredicateObjectIndex(BaseModel):
             print data
             poi = cls.objects.get(id=poi_id)
             poi.save()
+
+    @classmethod
+    def update_all_stale(cls, predicate=None, depth=None, nochildren=False):
+        tmp_debug = settings.DEBUG
+        settings.DEBUG = False
+        django.db.transaction.enter_transaction_management()
+        django.db.transaction.managed(True)
+        try:
+            q = cls.objects.stale()
+            if predicate:
+                q = q.filter(predicate__conceptnet_predicate=predicate)
+            if depth is not None:
+                q = q.filter(depth=depth)
+            q = q.order_by('-depth')
+            total = q.count()
+            #TODO:filter by context?
+            i = 0
+            for poi in q.iterator():
+                i += 1
+                if i == 1 or not i % 100:
+                    print 'Updating %i of %i (%.2f%%)' % (i, total, i/float(total)*100)
+                if not i % 100:
+                    django.db.transaction.commit()
+                poi.update(depth=depth, nochildren=nochildren)
+                #return#TODO:remove
+        finally:
+            print "Committing..."
+            settings.DEBUG = tmp_debug
+            django.db.transaction.commit()
+            django.db.transaction.leave_transaction_management()
+            print "Committed."
     
-    def update(self, priors=None, depth=0):
+    def update(self, priors=None, depth=None, nochildren=False):
+        """
+        Re-calculates entropy for all stale indexes.
+        """
         if priors is None:
             priors = set()
         if self.fresh:
             return self
         
-        triple_ids = set()
         if self.parent:
             upper_total_subject_count = self.parent.subject_count_total
         else:
             upper_total_subject_count = self.context.subject_count()
         
-        q2 = Triple.objects.real_active().filter(predicate=self.predicate, object=self.object)
-        if not q2:
-            self.subject_count_direct = self.subject_count_total = 0
-            self.entropy = 0
-            self.triple_ids = None
-            self.fresh = True
-            self.save()
-            return self
+        #print 'depth:',depth
+        #print list(self.all_prior_constraints)
         
-        # Could all triples directly matching our predicate+object.
-        agg = q2.distinct().aggregate(Count('id'))
-        self.subject_count_direct = self.subject_count_total = agg['id__count']
+        # Query all triples that match the previous constraints.
+        q = Triple.objects.active()
+        pred_objs = set() # (predicate,object)
+        po_hashes = set()
+        for constraint in self.all_prior_constraints:
+            pred_objs.add((constraint.predicate.id, constraint.object.id))
+            po_hashes.add(po_to_hash(constraint.predicate, constraint.object))
+            _po_ids = Triple.objects.active().filter(
+                    predicate=constraint.predicate,
+                    object=constraint.object,
+                ).values_list('id')
+            if constraint.polarity:
+                # There must exist a triple with the constraint's predicate+object.
+                q = q.filter(id__in=_po_ids)
+            else:
+                # There must not exist a triple with the constraint's predicate+object.
+                q = q.exclude(id__in=_po_ids)
+        #print 'q:',q.count()
         
-        # Could all predicates indirectly matching our predicate+object
-        # through a transitive predicate.
-        # Recursively generate indexes to avoid redundant network searches.
-        
-        # PredicateObjectIndex objects connected "lower" in the network via
-        # the subject of all triples that match the current predicate+object.
-        #lowers = set()
-        
-        if self.predicate.transitive:
-            for t2 in q2.iterator():
-                triple_ids.add(t2.id)
-                if t2 in priors:
+        # Find new subset that matches the current predicate+object.
+        qnow = q.filter(predicate=self.predicate, object=self.object)
+        #print 'qnow:',qnow.count()
+        if not nochildren and self.best_splitter and qnow.count():
+            print 'Populating for best splitter with entropy %s!' % (self.entropy,)
+            
+            # Find all unique remaining predicate+object combinations.
+            qnext = Triple.objects.active()\
+                .filter(subject__in=qnow.values_list('subject'))\
+                .exclude(po_hash__in=po_hashes)\
+                .values('predicate', 'object')\
+                .annotate(count=Count('id'))
+            total = qnext.count()
+            #print 'qnext:',total
+            i = 0
+            for nextr in qnext.iterator():
+                i += 1
+                if not i % 100:
+                    django.db.transaction.commit()
+                predicate_id = nextr['predicate']
+                object_id = nextr['object']
+                key = (predicate_id, object_id)
+                if key in pred_objs:
                     continue
-                priors.add(t2)
-                q3 = Triple.objects.real_active().filter(predicate=t2.predicate, object=t2.subject)
-                for t3 in q3.iterator():
-                    triple_ids.add(t3.id)
-                    if t3 in priors:
-                        continue
-                    priors.add(t3)
-#                    print 'predicate:',self.predicate
-#                    print 'object:',t3.object
-                    poi3, _ = PredicateObjectIndex.objects.get_or_create(
-                        context=self.context,
-                        predicate=self.predicate,
-                        object=t3.object)
-                    poi3.update(priors=priors, depth=depth+1)
-                    
-#                    pois, _ = PredicateObjectIndexLink.objects.get_or_create(lower=poi3, upper=self)
-#                    lowers.add(pois)
-                    
-                    #self.subject_count_total += poi3.subject_count_total
-                    #self.subject_count_total += len(poi3.triple_ids)
-                    triple_ids.update(poi3.triple_ids)
+                print '\rPopulating next level (%i of %i)...' % (i, total),
+                pred_objs.add(key)
+                
+                next_yes, _ = type(self).objects.get_or_create(
+                    context=self.context,
+                    predicate=Sense.objects.get(id=predicate_id),
+                    object=Sense.objects.get(id=object_id),
+                    parent=self,
+                    prior=True,
+                    defaults=dict(fresh=False))
+                
+                next_no, _ = type(self).objects.get_or_create(
+                    context=self.context,
+                    predicate=Sense.objects.get(id=predicate_id),
+                    object=Sense.objects.get(id=object_id),
+                    parent=self,
+                    prior=False,
+                    defaults=dict(fresh=False))
+            print
         
-        self.triple_ids = triple_ids
-        self.subject_count_total += len(triple_ids)
-        if self.subject_count_total:
-            self.entropy = dtree.entropy(data=dict(a=self.subject_count_total, b=upper_total_subject_count))
+        # Find counts of unique subjects in the current subset.
+        agg = qnow.aggregate(Count('subject', distinct=True))
+        #print 'agg:',agg
+        self.subject_count_total = agg['subject__count']
+        self.entropy = 0
+        #print 'qnow.subjects:',self.subject_count_total
+        
+        if self.subject_count_total and upper_total_subject_count:
+            self.entropy = dtree.entropy(data=dict(
+                a=self.subject_count_total,
+                b=upper_total_subject_count,
+            ))
         else:
             self.entropy = 0
+        #print 'entropy:',self.entropy
             
         self.fresh = True
         self.save()
             
         return self
-
-    @classmethod
-    def update_all(cls, predicate=None):
-        q = cls.objects.stale()
-        if predicate:
-            q = q.filter(predicate__conceptnet_predicate=predicate)
-        total = q.count()
-        #TODO:filter by context?
-        i = 0
-        for poi in q.iterator():
-            i += 1
-            if i == 1 or not i % 100:
-                print 'Updating %i of %i (%.2f%%)' % (i, total, i/float(total)*100)
-            poi.update()
-            
+    

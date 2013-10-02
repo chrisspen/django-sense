@@ -362,10 +362,9 @@ class PredicateObjectIndexAdmin(
         'predicate_link',
         #'object',
         'object_link',
-        'subject',
+        'prior',
         'parent',
         'best_splitter',
-        'subject_count_direct',
         'subject_count_total',
         'depth',
         'entropy',
@@ -382,8 +381,11 @@ class PredicateObjectIndexAdmin(
         'context',
         'predicate',
         'object',
-        'subject',
         'parent',
+    )
+    
+    exclude = (
+        '_triple_ids',
     )
     
     def lookup_allowed(self, key, value=None):
