@@ -998,7 +998,7 @@ class PredicateObjectIndex(BaseModel):
     
     objects = PredicateObjectIndexManager()
     
-    parent = models.ForeignKey('self', blank=True, null=True)#, related_name='predicate_object_indexes')
+    parent = models.ForeignKey('self', blank=True, null=True, related_name='children')
     
     context = models.ForeignKey(Context, related_name='predicate_object_indexes')
     
@@ -1028,6 +1028,19 @@ class PredicateObjectIndex(BaseModel):
     fresh = models.BooleanField(
         default=False,
         db_index=True)
+    
+    enabled = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text='''If checked, the entropy of this index will be
+            automatically updated whenever matching triples are created,
+            updated or deleted.''')
+    
+    check_enabled = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text='''If checked, the enabled flag will be propagated based
+            on the value of best_splitter.''')
     
 #    subject_count_direct = models.PositiveIntegerField(
 #        blank=True,
@@ -1082,6 +1095,7 @@ class PredicateObjectIndex(BaseModel):
             ('context', 'parent', 'prior', 'best_splitter'),
         )
         index_together = (
+            ('context', 'parent', 'prior'),
             ('context', 'parent', 'predicate', 'object', 'prior'),
             ('context', 'predicate', 'object', 'prior'),
             ('context', 'parent', 'predicate', 'object', 'prior'),
@@ -1115,6 +1129,10 @@ class PredicateObjectIndex(BaseModel):
 
     def save(self, *args, **kwargs):
         
+        check_best_splitter = kwargs.get('check_best_splitter', True)
+        if 'check_best_splitter' in kwargs:
+            del kwargs['check_best_splitter']
+        
         if self.parent:
             self.depth = self.parent.depth + 1
         else:
@@ -1123,11 +1141,14 @@ class PredicateObjectIndex(BaseModel):
         old = type(self).objects.get(id=self.id) if self.id else None
         if not self.id or not self.po_hash or (self.id and (self.predicate != old.predicate or self.object != old.object)):
             self.po_hash = po_to_hash(self.predicate, self.object)
-                
-        if self.id:
+        
+        if self.id and check_best_splitter:
             # Check for best splitter by entropy at this node.
-            #TODO:check for parent__isnull=True?
-            if self.entropy != old.entropy or self.best_splitter is None:
+            if not self.entropy:
+                self.best_splitter = None
+            elif round(self.entropy or 0,12) != round(old.entropy or 0,12) or self.best_splitter is None:
+                #TODO:check for parent__isnull=True?
+                #print 'Checking for best splitter...'
                 best_entropy = type(self).objects\
                     .filter(
                         context=self.context,
@@ -1136,55 +1157,84 @@ class PredicateObjectIndex(BaseModel):
                     .aggregate(Max('entropy'))['entropy__max']
 #                print 'best_entropy:',best_entropy
 #                print 'entropy:',self.entropy
-                if best_entropy == self.entropy:
+#                print 'equal:',round(best_entropy,12) == round(self.entropy,12)
+                if round(best_entropy or 0,12) == round(self.entropy or 0,12):
                     PredicateObjectIndex.objects\
                         .exclude(id=self.id)\
                         .filter(
                             context=self.context,
                             parent=self.parent,
-                            prior=self.prior)\
-                        .update(best_splitter=None)
+                            best_splitter__isnull=False,
+                            prior=self.prior,
+                        ).update(
+                            best_splitter=None,
+                        )
+                    #print 'Set new best_splitter!'
                     self.best_splitter = True
                 else:
                     self.best_splitter = None
                     
-                if old.best_splitter != self.best_splitter:
-                    self.fresh = False
+        if old.best_splitter != self.best_splitter:
+            self.fresh = False
+            self.check_enabled = True
+        
+#        print 'check_best_splitter:',check_best_splitter
+#        print 'best_splitter:',self.best_splitter
+#        print 'bs changed:',old.best_splitter != best_splitter0
+#        if check_best_splitter and old.best_splitter != best_splitter0:
+#            print '!'*80
+#            print 'Toggling enabled flag!'
+#            if self.best_splitter:
+#                self.enabled = True
+#            else:
+#                self.enabled = False
+#            self.propagate_enabled()
         
         super(PredicateObjectIndex, self).save(*args, **kwargs)
     
-    #TODO:deprecated?
-    @classmethod
-    def update_all_best(cls):
-        cursor = connection.cursor()
-        cursor.execute('''
-        SELECT m.subject_id, m.depth, m.max_entropy, n.id
-        FROM (
-            SELECT subject_id, depth, MAX(entropy) AS max_entropy
-            FROM sense_predicateobjectindex AS poi
-            GROUP BY subject_id, depth
-            HAVING COUNT(best_splitter) <= 0
-        ) AS m
-        INNER JOIN sense_predicateobjectindex AS n
-        ON    ((n.subject_id IS NULL AND m.subject_id IS NULL) OR (n.subject_id = m.subject_id))
-        AND    n.depth = m.depth
-        AND    n.entropy = m.max_entropy
-        ''')
-        for data in cursor.fetchall():
-            #print subject_id, depth, max_entropy
-            subject_id, depth, max_entropy, poi_id = data
-            print data
-            poi = cls.objects.get(id=poi_id)
-            poi.save()
+    def propagate_enabled(self, v=None, auto_commit=False):
+        """
+        Recursively copies the `enabled` flag to all child records.
+        """
+        if v is None:
+            # This is the start node, so determine what the start value is.
+            if not self.check_enabled:
+                return
+            self.check_enabled = False
+            self.enabled = bool(self.best_splitter)
+            v = self.enabled
+        elif not self.best_splitter:
+            # This is a child node, so only propagate if the child is also
+            # a best splitter.
+            self.save(check_best_splitter=False)
+            return
+        
+        # Updated all children then check for propagation.
+        q = self.children.all().exclude(enabled=v)
+        total = q.count()
+        i = 0
+        if total:
+            print
+        for child in q.iterator():
+            i += 1
+            if not i % 100:
+                print '\r\tDepth %i (%i of %i)' % (child.depth, i, total),
+                if auto_commit:
+                    django.db.transaction.commit()
+            if child.enabled != v:
+                child.enabled = v
+                child.propagate_enabled(v=v)
+        self.save(check_best_splitter=False)
 
     @classmethod
-    def update_all_stale(cls, predicate=None, depth=None, nochildren=False):
+    def update_all_stale(cls, predicate=None, depth=None, nochildren=False, dryrun=False):
         tmp_debug = settings.DEBUG
         settings.DEBUG = False
         django.db.transaction.enter_transaction_management()
         django.db.transaction.managed(True)
         try:
             q = cls.objects.stale()
+            q = q.filter(enabled=True)
             if predicate:
                 q = q.filter(predicate__conceptnet_predicate=predicate)
             if depth is not None:
@@ -1197,16 +1247,17 @@ class PredicateObjectIndex(BaseModel):
                 i += 1
                 if i == 1 or not i % 100:
                     print 'Updating %i of %i (%.2f%%)' % (i, total, i/float(total)*100)
-                if not i % 100:
+                if not dryrun and not i % 100:
                     django.db.transaction.commit()
                 poi.update(depth=depth, nochildren=nochildren)
                 #return#TODO:remove
         finally:
-            print "Committing..."
-            settings.DEBUG = tmp_debug
-            django.db.transaction.commit()
-            django.db.transaction.leave_transaction_management()
-            print "Committed."
+            if not dryrun:
+                print "Committing..."
+                settings.DEBUG = tmp_debug
+                django.db.transaction.commit()
+                django.db.transaction.leave_transaction_management()
+                print "Committed."
     
     def update(self, priors=None, depth=None, nochildren=False):
         """
@@ -1233,9 +1284,9 @@ class PredicateObjectIndex(BaseModel):
             pred_objs.add((constraint.predicate.id, constraint.object.id))
             po_hashes.add(po_to_hash(constraint.predicate, constraint.object))
             _po_ids = Triple.objects.active().filter(
-                    predicate=constraint.predicate,
-                    object=constraint.object,
-                ).values_list('id')
+                predicate=constraint.predicate,
+                object=constraint.object,
+            ).values_list('id')
             if constraint.polarity:
                 # There must exist a triple with the constraint's predicate+object.
                 q = q.filter(id__in=_po_ids)
@@ -1247,6 +1298,26 @@ class PredicateObjectIndex(BaseModel):
         # Find new subset that matches the current predicate+object.
         qnow = q.filter(predicate=self.predicate, object=self.object)
         #print 'qnow:',qnow.count()
+        
+        # Find counts of unique subjects in the current subset.
+        agg = qnow.aggregate(Count('subject', distinct=True))
+        #print 'agg:',agg
+        self.subject_count_total = agg['subject__count']
+        self.entropy = 0
+        #print 'qnow.subjects:',self.subject_count_total
+        
+        if self.subject_count_total and upper_total_subject_count:
+            self.entropy = dtree.entropy(data=dict(
+                a=self.subject_count_total,
+                b=upper_total_subject_count,
+            ))
+        else:
+            self.entropy = 0
+        #print 'entropy:',self.entropy
+        
+        self.fresh = True
+        self.save()
+        
         if not nochildren and self.best_splitter and qnow.count():
             print 'Populating for best splitter with entropy %s!' % (self.entropy,)
             
@@ -1254,6 +1325,11 @@ class PredicateObjectIndex(BaseModel):
             qnext = Triple.objects.active()\
                 .filter(subject__in=qnow.values_list('subject'))\
                 .exclude(po_hash__in=po_hashes)\
+                .exclude(po_hash=self.po_hash)\
+                .exclude(po_hash__in=type(self).objects.filter(# exclude pre-populated
+                    context=self.context,
+                    parent=self,
+                ).values_list('po_hash', flat=True))\
                 .values('predicate', 'object')\
                 .annotate(count=Count('id'))
             total = qnext.count()
@@ -1287,25 +1363,6 @@ class PredicateObjectIndex(BaseModel):
                     prior=False,
                     defaults=dict(fresh=False))
             print
-        
-        # Find counts of unique subjects in the current subset.
-        agg = qnow.aggregate(Count('subject', distinct=True))
-        #print 'agg:',agg
-        self.subject_count_total = agg['subject__count']
-        self.entropy = 0
-        #print 'qnow.subjects:',self.subject_count_total
-        
-        if self.subject_count_total and upper_total_subject_count:
-            self.entropy = dtree.entropy(data=dict(
-                a=self.subject_count_total,
-                b=upper_total_subject_count,
-            ))
-        else:
-            self.entropy = 0
-        #print 'entropy:',self.entropy
-            
-        self.fresh = True
-        self.save()
             
         return self
     

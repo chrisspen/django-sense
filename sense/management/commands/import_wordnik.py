@@ -31,7 +31,7 @@ class Command(BaseCommand):
     
     def handle(self, *args, **options):
         
-        from wordnik import *
+        from wordnik import swagger, WordApi
         client = swagger.ApiClient(settings.WORDNIK_KEY, settings.WORDNIK_API)
         wordApi = WordApi.WordApi(client)
         definitions = wordApi.getDefinitions('child',

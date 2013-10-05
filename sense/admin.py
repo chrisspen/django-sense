@@ -328,29 +328,6 @@ class TripleAdmin(
     
 admin.site.register(models.Triple, TripleAdmin)
 
-class PredicateObjectIndexToSelfAdmin(
-    admin_steroids.BetterRawIdFieldsModelAdmin,
-    admin_steroids.FormatterModelAdmin):
-    
-    list_display = (
-        'lower',
-        'upper',
-        'entropy',
-        'created',
-        'updated',
-    )
-    raw_id_fields = (
-        'lower',
-        'upper',
-    )
-    readonly_fields = (
-        'entropy',
-        'created',
-        'updated',
-    )
-    
-#admin.site.register(models.PredicateObjectIndexToSelf, PredicateObjectIndexToSelfAdmin)
-    
 class PredicateObjectIndexAdmin(
     admin_steroids.BetterRawIdFieldsModelAdmin,
     admin_steroids.FormatterModelAdmin):
@@ -362,17 +339,19 @@ class PredicateObjectIndexAdmin(
         'predicate_link',
         #'object',
         'object_link',
-        'prior',
         'parent',
+        'prior',
         'best_splitter',
         'subject_count_total',
         'depth',
         'entropy',
         'fresh',
+        'enabled',
     )
     
     list_filter = (
         'fresh',
+        'enabled',
         'best_splitter',
         ('entropy', NullListFilter),
     )
@@ -382,6 +361,10 @@ class PredicateObjectIndexAdmin(
         'predicate',
         'object',
         'parent',
+    )
+    
+    readonly_fields = (
+        'children_link',
     )
     
     exclude = (
@@ -404,6 +387,14 @@ class PredicateObjectIndexAdmin(
         url = utils.get_admin_change_url(obj.object.word)
         return mark_safe(u'<a href="%s" target="_blank">%s</a>' % (url, unicode(obj.object)[:50].replace(' ', '&nbsp;')))
     object_link.short_description = 'object'
+    
+    def children_link(self, obj=None):
+        if not obj:
+            return ''
+        q = obj.children.all()
+        url = utils.get_admin_changelist_url(models.PredicateObjectIndex) + '?parent__id=' + str(obj.id)
+        return mark_safe(u'<a href="%s" target="_blank"><input type="button" value="View %i" /></a>' % (url, q.count()))
+    children_link.short_description = 'children'
     
 admin.site.register(models.PredicateObjectIndex, PredicateObjectIndexAdmin)
 

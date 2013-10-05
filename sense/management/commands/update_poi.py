@@ -91,6 +91,7 @@ class Command(BaseCommand):
                 predicate=predicate,
                 depth=depth,
                 nochildren=options['nochildren'],
+                dryrun=dryrun,
             )
 #        
         #models.PredicateObjectIndex.update_all_best()
