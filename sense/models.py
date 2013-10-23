@@ -199,6 +199,12 @@ class Word(BaseModel):
         editable=False,
         db_index=True)
     
+    trusted = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text='''If unchecked, indicates this record was added by a potentially
+            untrusted user and should be reviewed by staff.''')
+    
     class Meta:
         ordering = ('text',)
     
@@ -290,13 +296,24 @@ class Sense(BaseModel):
         help_text='''If checked, this sense will be used for logical inferences
             with triples.''')
     
-    definition = models.TextField(blank=True, null=True)
+    definition = models.TextField(
+        blank=True,
+        null=True,
+        help_text='A generic internal description of this sense.')
     
     examples = models.ManyToManyField(Example, blank=True, null=True)
+    
+    trusted = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text='''If unchecked, indicates this record was added by a potentially
+            untrusted user and should be reviewed by staff.''')
     
     _name = models.CharField(
         max_length=700,
         verbose_name='name',
+        help_text='''An auto-generated human-readable slug-like field used
+            to globally identify this sense.''',
         editable=True,
         blank=True,
         null=True)
@@ -516,6 +533,8 @@ class Context(BaseModel):
     
     name = models.CharField(max_length=200, blank=False, null=False, default='global')
     
+    owner = models.ForeignKey('auth.User', blank=True, null=True)
+    
     parent = models.ForeignKey('self', blank=True, null=True, related_name='children')
     
     top_parent = models.ForeignKey('self', blank=True, null=True, related_name='top_children')
@@ -560,7 +579,7 @@ class Context(BaseModel):
     
     class Meta:
         unique_together = (
-            ('name', 'parent'),
+            ('name', 'parent', 'owner'),
         )
         
     def __unicode__(self):
@@ -916,6 +935,10 @@ class Triple(BaseModel):
                 ctx.clear_caches()
 
 class BaseTripleVote(BaseModel):
+    """
+    An abstract model to serve as the basis for linking a triple to an
+    app-specific user model.
+    """
     
     triple = models.ForeignKey(Triple, related_name='votes')
     

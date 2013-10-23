@@ -7,22 +7,23 @@ from django.db import models
 class Migration(DataMigration):
 
     def forwards(self, orm):
-        from sense.models import Triple, Sense
-        q = Triple.objects.filter(predicate__word__text='is same as', weight=0.0)
-        antonym = Sense.objects.get(conceptnet_predicate='Antonym')
-        total = q.count()
-        i = 0
-        for t in q.iterator():
-            i += 1
-            #print t.natural_reading()#.subject, t.predicate, t.object
-            if i == 1 or not i % 100:
-                print '%i of %i (%i%%)' % (i, total, int(i/float(total)*100))
-            if Triple.objects.filter(subject=t.subject, predicate=antonym, object=t.object).count():
-                t.delete()
-            else:
-                t.predicate = antonym
-                t.weight = 1.0
-                t.save()
+#        from sense.models import Triple, Sense
+#        q = Triple.objects.filter(predicate__word__text='is same as', weight=0.0)
+#        antonym = Sense.objects.get(conceptnet_predicate='Antonym')
+#        total = q.count()
+#        i = 0
+#        for t in q.iterator():
+#            i += 1
+#            #print t.natural_reading()#.subject, t.predicate, t.object
+#            if i == 1 or not i % 100:
+#                print '%i of %i (%i%%)' % (i, total, int(i/float(total)*100))
+#            if Triple.objects.filter(subject=t.subject, predicate=antonym, object=t.object).count():
+#                t.delete()
+#            else:
+#                t.predicate = antonym
+#                t.weight = 1.0
+#                t.save()
+        pass
 
     def backwards(self, orm):
         "Write your backwards methods here."

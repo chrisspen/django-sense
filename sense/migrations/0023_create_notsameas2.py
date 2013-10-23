@@ -7,17 +7,18 @@ from django.db import models
 class Migration(DataMigration):
 
     def forwards(self, orm):
-        from sense.models import Triple, Sense
-        q = Triple.objects.filter(predicate__word__text='is opposite of', weight=0.0)
-        total = q.count()
-        i = 0
-        for t in q.iterator():
-            i += 1
-            if i == 1 or not i % 100:
-                print '%i of %i (%i%%)' % (i, total, int(i/float(total)*100))
-            vote = t.votes.all()[0]
-            vote.weight = 1.0
-            vote.save()
+#        from sense.models import Triple, Sense
+#        q = Triple.objects.filter(predicate__word__text='is opposite of', weight=0.0)
+#        total = q.count()
+#        i = 0
+#        for t in q.iterator():
+#            i += 1
+#            if i == 1 or not i % 100:
+#                print '%i of %i (%i%%)' % (i, total, int(i/float(total)*100))
+#            vote = t.votes.all()[0]
+#            vote.weight = 1.0
+#            vote.save()
+        pass
 
     def backwards(self, orm):
         "Write your backwards methods here."

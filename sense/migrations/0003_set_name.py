@@ -11,14 +11,15 @@ class Migration(DataMigration):
     def forwards(self, orm):
         "Write your forwards methods here."
         # Note: Remember to use orm['appname.ModelName'] rather than "from appname.models..."
-        q = Sense.objects.all()
-        i = 0
-        total = q.count()
-        for s in q:
-            i += 1
-            if not i % 100:
-                print '%i of %i' % (i, total)
-            s.save()
+#        q = Sense.objects.all()
+#        i = 0
+#        total = q.count()
+#        for s in q:
+#            i += 1
+#            if not i % 100:
+#                print '%i of %i' % (i, total)
+#            s.save()
+        pass
 
     def backwards(self, orm):
         "Write your backwards methods here."

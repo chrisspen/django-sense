@@ -237,6 +237,7 @@ class ContextAdmin(admin.ModelAdmin):
     raw_id_fields = (
         'parent',
         'rules',
+        'owner',
     )
     
     actions = (

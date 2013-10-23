@@ -27,10 +27,10 @@ class Migration(SchemaMigration):
         db.create_unique(u'sense_predicateobjectindex', ['context_id', 'parent_id', 'predicate_id', 'object_id'])
 
         # Removing index on 'PredicateObjectIndex', fields ['context', 'predicate', 'object', 'subject']
-        db.delete_index(u'sense_predicateobjectindex', ['context_id', 'predicate_id', 'object_id', 'subject_id'])
+        #db.delete_index(u'sense_predicateobjectindex', ['context_id', 'predicate_id', 'object_id', 'subject_id'])
 
         # Removing index on 'PredicateObjectIndex', fields ['context', 'parent', 'predicate', 'object', 'subject']
-        db.delete_index(u'sense_predicateobjectindex', ['context_id', 'parent_id', 'predicate_id', 'object_id', 'subject_id'])
+        #db.delete_index(u'sense_predicateobjectindex', ['context_id', 'parent_id', 'predicate_id', 'object_id', 'subject_id'])
 
 
     def backwards(self, orm):
