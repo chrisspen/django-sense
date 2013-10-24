@@ -225,20 +225,8 @@ class Migration(SchemaMigration):
         # Adding index on 'PredicateObjectIndex', fields ['context', 'predicate', 'object', 'prior']
         db.create_index(u'sense_predicateobjectindex', ['context_id', 'predicate_id', 'object_id', 'prior'])
 
-        # Adding index on 'PredicateObjectIndex', fields ['context', 'parent', 'predicate', 'object', 'prior']
-        db.create_index(u'sense_predicateobjectindex', ['context_id', 'parent_id', 'predicate_id', 'object_id', 'prior'])
-
-        # Adding index on 'PredicateObjectIndex', fields ['context', 'predicate', 'object', 'prior']
-        db.create_index(u'sense_predicateobjectindex', ['context_id', 'predicate_id', 'object_id', 'prior'])
-
 
     def backwards(self, orm):
-        # Removing index on 'PredicateObjectIndex', fields ['context', 'predicate', 'object', 'prior']
-        db.delete_index(u'sense_predicateobjectindex', ['context_id', 'predicate_id', 'object_id', 'prior'])
-
-        # Removing index on 'PredicateObjectIndex', fields ['context', 'parent', 'predicate', 'object', 'prior']
-        db.delete_index(u'sense_predicateobjectindex', ['context_id', 'parent_id', 'predicate_id', 'object_id', 'prior'])
-
         # Removing index on 'PredicateObjectIndex', fields ['context', 'predicate', 'object', 'prior']
         db.delete_index(u'sense_predicateobjectindex', ['context_id', 'predicate_id', 'object_id', 'prior'])
 
