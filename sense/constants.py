@@ -130,3 +130,15 @@ RULE_ISA = 'ISA'
 RULE_CHOICES = (
     (RULE_ISA, 'ISA'),
 )
+
+PUBLIC = 'public'
+PRIVATE = 'private',
+ACCESS_CHOICES = (
+    (PUBLIC, 'public'),
+    (PRIVATE, 'private'),
+)
+
+OWNER_ONLY = 'owner-only'
+EDIT_CHOICES = (
+    (OWNER_ONLY, 'owner-only'),
+)

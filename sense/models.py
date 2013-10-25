@@ -577,6 +577,20 @@ class Context(BaseModel):
     
     rules = models.ManyToManyField('InferenceRule', related_name='contexts')
     
+    accessibility = models.CharField(
+        max_length=25,
+        choices=c.ACCESS_CHOICES,
+        default=c.PRIVATE,
+        blank=False,
+        null=False)
+    
+    editability = models.CharField(
+        max_length=25,
+        choices=c.EDIT_CHOICES,
+        default=c.OWNER_ONLY,
+        blank=False,
+        null=False)
+    
     class Meta:
         unique_together = (
             ('name', 'parent', 'owner'),
