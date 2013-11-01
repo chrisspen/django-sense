@@ -130,7 +130,8 @@ class SenseExampleInline(admin.TabularInline):
         print [f.name for f in self.model._meta.fields]
         return list(self.readonly_fields) + [f.name for f in self.model._meta.fields]
     
-class SenseAdmin(admin.ModelAdmin):
+class SenseAdmin(
+    admin_steroids.BetterRawIdFieldsModelAdmin):
     search_fields = (
         'word__text',
     )
@@ -153,10 +154,17 @@ class SenseAdmin(admin.ModelAdmin):
         'subject_triples_link',
         'predicate_triples_link',
         'object_triples_link',
+        '_text',
+        'search_index',
     )
     exclude = (
         'examples',
     )
+    
+    actions = (
+        'refresh',
+    )
+    
     inlines = [SenseExampleInline]
     
     def name_short(self, obj=None):
@@ -167,6 +175,15 @@ class SenseAdmin(admin.ModelAdmin):
     def examples_count(self, obj):
         return obj.examples.all().count()
     examples_count.short_description = 'examples'
+    
+    def refresh(self, request, queryset):
+        total = queryset.count()
+        i = 0
+        for c in queryset.iterator():
+            i += 1
+            print '%i of %i' % (i, total)
+            c.save()
+    refresh.short_description = 'Refresh selected %(verbose_name_plural)s'
     
     def lookup_allowed(self, key, value=None):
         return True
@@ -206,17 +223,24 @@ class SenseAdmin(admin.ModelAdmin):
     
 admin.site.register(models.Sense, SenseAdmin)
     
-class ContextAdmin(admin.ModelAdmin):
+class ContextAdmin(
+    admin_steroids.BetterRawIdFieldsModelAdmin,
+    admin_steroids.FormatterModelAdmin):
+    
     search_fields = (
         'name',
     )
     list_filter = (
         'allow_inference',
+        'owner',
     )
     list_display = (
         'id',
         'name',
         'parent',
+        'owner',
+        'accessibility',
+        'editability',
         'triple_count',
         'subject_count',
         'allow_inference',
@@ -233,11 +257,14 @@ class ContextAdmin(admin.ModelAdmin):
     exclude = (
         'triples',
         'all_triples',
+        'senses',
+        'all_senses',
     )
     raw_id_fields = (
         'parent',
         'rules',
         'owner',
+        'top_parent',
     )
     
     actions = (
@@ -267,6 +294,7 @@ class TripleAdmin(
         'subject__word__text',
         'predicate__word__text',
         'object__word__text',
+        '_text',
     )
     list_filter = (
         'inferred',
@@ -288,9 +316,12 @@ class TripleAdmin(
         'deleted',
     )
     raw_id_fields = (
+        'owner',
         'subject',
+        'subject_triple',
         'predicate',
         'object',
+        'object_triple',
         'inference_rule',
         'inference_arguments',
     )
@@ -299,18 +330,39 @@ class TripleAdmin(
         'subject_link',
         'predicate_link',
         'object_link',
+        'po_hash',
+        '_text',
+        'search_index',
     )
     exclude = (
+    )
+    
+    actions = (
+        'refresh',
     )
     
     def lookup_allowed(self, key, value=None):
         return True
     
+    def refresh(self, request, queryset):
+        total = queryset.count()
+        i = 0
+        for c in queryset.iterator():
+            i += 1
+            print '%i of %i' % (i, total)
+            c.save()
+    refresh.short_description = 'Refresh selected %(verbose_name_plural)s'
+    
     def subject_link(self, obj=None):
         if not obj:
             return ''
-        url = utils.get_admin_change_url(obj.subject.word)
-        return mark_safe(u'<a href="%s" target="_blank">%s</a>' % (url, unicode(obj.subject)[:50].replace(' ', '&nbsp;')))
+        if obj.subject:
+            url = utils.get_admin_change_url(obj.subject.word)
+            return mark_safe(u'<a href="%s" target="_blank">%s</a>' % (url, unicode(obj.subject)[:50].replace(' ', '&nbsp;')))
+        elif obj.subject_triple:
+            url = utils.get_admin_change_url(obj.subject_triple)
+            return mark_safe(u'<a href="%s" target="_blank">%s</a>' % (url, unicode(obj.subject_triple)[:50].replace(' ', '&nbsp;')))
+        return ''
     subject_link.short_description = 'subject'
     
     def predicate_link(self, obj=None):
@@ -323,8 +375,13 @@ class TripleAdmin(
     def object_link(self, obj=None):
         if not obj:
             return ''
-        url = utils.get_admin_change_url(obj.object.word)
-        return mark_safe(u'<a href="%s" target="_blank">%s</a>' % (url, unicode(obj.object)[:50].replace(' ', '&nbsp;')))
+        if obj.object:
+            url = utils.get_admin_change_url(obj.object.word)
+            return mark_safe(u'<a href="%s" target="_blank">%s</a>' % (url, unicode(obj.object)[:50].replace(' ', '&nbsp;')))
+        elif obj.object_triple:
+            url = utils.get_admin_change_url(obj.object_triple)
+            return mark_safe(u'<a href="%s" target="_blank">%s</a>' % (url, unicode(obj.object_triple)[:50].replace(' ', '&nbsp;')))
+        return ''
     object_link.short_description = 'object'
     
 admin.site.register(models.Triple, TripleAdmin)
@@ -410,6 +467,41 @@ class InferenceRuleAdmin(admin.ModelAdmin):
         'created',
         'updated',
         'deleted',
+        'search_index',
     )
     
 admin.site.register(models.InferenceRule, InferenceRuleAdmin)
+
+class TripleInferenceAdmin(
+    admin_steroids.BetterRawIdFieldsModelAdmin):
+    
+    list_display = (
+        'id',
+        'inference_rule',
+        'inferred_triple',
+        'inference_arguments_str',
+        'confirmed',
+    )
+    
+    readonly_fields = (
+        'inference_arguments_str',
+        #'confirmed',
+    )
+    
+    raw_id_fields = (
+        'inference_rule',
+        'inferred_triple',
+        'inference_arguments',
+    )
+    
+    list_filter = (
+        'confirmed',
+    )
+    
+    def inference_arguments_str(self, obj=None):
+        if not obj:
+            return ''
+        return ', '.join(_._text for _ in obj.inference_arguments.all())
+    inference_arguments_str.short_description = 'arguments'
+    
+admin.site.register(models.TripleInference, TripleInferenceAdmin)

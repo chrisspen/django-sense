@@ -7,10 +7,13 @@ import cPickle as pickle
 
 from django.conf import settings
 from django.db import models
-from django.db.models import Sum, Count, Max
+from django.db.models import Sum, Count, Max, Q
 from django.utils import timezone
 from django.db import connection
 import django
+
+from djorm_pgfulltext.models import SearchManager
+from djorm_pgfulltext.fields import VectorField
 
 import dtree
 
@@ -19,17 +22,28 @@ import settings as _settings
 
 Constraint = namedtuple('Constraint', ['predicate', 'object', 'polarity'])
 
-def po_to_hash(p, o):
+def po_to_hash(p, o, o2=None):
     """
-    Converts a (predicate, object) tuple into a unique hash.
+    Converts a (predicate, object, object_triple) tuple into a unique hash.
     """
     if not isinstance(p, int):
         p = p.id
-    if not isinstance(o, int):
-        o = o.id
     assert isinstance(p, int)
-    assert isinstance(o, int)
-    return hashlib.sha512(pickle.dumps((p, o))).hexdigest()
+    
+    if o is None:
+        assert o2 is not None, 'Either o=sense or o2=triple must be specified.'
+    else:
+        if not isinstance(o, int):
+            o = o.id
+        assert isinstance(o, int)
+        
+    if o2 is None:
+        return hashlib.sha512(pickle.dumps((p, o))).hexdigest()
+    else:
+        if not isinstance(o2, int):
+            o2 = o2.id
+        assert isinstance(o2, int)
+        return hashlib.sha512(pickle.dumps((p, o, o2))).hexdigest()
 
 def print_status(top_percent, sub_percent, message, max_message_length=100, newline=False):
     """
@@ -245,6 +259,8 @@ class Sense(BaseModel):
     
     objects = SenseManager()
     
+    owner = models.ForeignKey('auth.User', blank=True, null=True)
+    
     source = models.ForeignKey(Source, related_name='senses', blank=True, null=True)
     
     word = models.ForeignKey(Word, related_name='senses')
@@ -318,16 +334,36 @@ class Sense(BaseModel):
         blank=True,
         null=True)
     
+    _text = models.TextField(
+        blank=True,
+        null=True,
+        db_column='text',
+        editable=False,
+        help_text='''The cached value of the word text from the word.''')
+        
+    search_index = VectorField()
+
+    search_objects = SearchManager(
+        fields = (
+            '_text',
+            'conceptnet_predicate',
+        ),
+        config = 'pg_catalog.english', # this is default
+        search_field = 'search_index', # this is default
+        auto_update_search_field = True
+    )
+    
     class Meta:
         ordering = (
-            'source',
-            'pos',
-            'word',
-            'definition',
+            'word__text',
+#            'source',
+#            'pos',
+#            'word',
+#            'definition',
         )
         unique_together = (
-            ('source', 'word', 'pos', 'definition'),
-            ('source', 'word', 'pos', 'wordnet_id'),
+            ('source', 'word', 'pos', 'definition', 'owner'),
+            ('source', 'word', 'pos', 'wordnet_id', 'owner'),
         )
         
     def natural_key(self):
@@ -338,6 +374,8 @@ class Sense(BaseModel):
     
     def save(self, *args, **kwargs):
         self.name
+        
+        self._text = self.word.text
         
         if not (self.conceptnet_predicate or '').strip():
             self.conceptnet_predicate = None
@@ -358,7 +396,13 @@ class Sense(BaseModel):
     def __unicode__(self):
         return '%s: %s' % (self.id, self.name)
 
+class InferenceRuleManager(models.Manager):
+    
+    pass
+
 class InferenceRule(BaseModel):
+    
+    objects = InferenceRuleManager()
     
     name = models.CharField(
         max_length=100,
@@ -366,6 +410,18 @@ class InferenceRule(BaseModel):
         null=False,
         unique=True,
         db_index=True)
+    
+    simple_description = models.TextField(
+        blank=True,
+        null=True,
+        help_text='''A simple description in a form of a
+            single "if then" sentence.''')
+    
+    description = models.TextField(
+        blank=True,
+        null=True,
+        help_text='''A potentially long-winded description of the rule.
+            May be shown as help-text to public users.''')
     
     type = models.CharField(
         max_length=100,
@@ -375,7 +431,30 @@ class InferenceRule(BaseModel):
         unique=True,
         db_index=True)
     
+    transitive_predicate = models.CharField(
+        max_length=100,
+        default='IsA',
+        blank=True,
+        null=True,
+        help_text='''If type is IsA, this will be the predicate used to match
+            against the predicate.''')
+    
+    search_index = VectorField()
+
+    search_objects = SearchManager(
+        fields = (
+            'name',
+            'transitive_predicate',
+            'simple_description',
+        ),
+        config = 'pg_catalog.english', # this is default
+        search_field = 'search_index', # this is default
+        auto_update_search_field = True
+    )
+    
     def __unicode__(self):
+        if self.simple_description:
+            return self.simple_description
         return self.name
     
     def get_isa_query(self, context, limit):
@@ -399,7 +478,7 @@ INNER JOIN  sense_context_all_triples AS sct0 ON
     AND sct0.context_id = {context_id}
 INNER JOIN  sense_sense AS pred0 ON
         pred0.id = t0.predicate_id
-    AND pred0.conceptnet_predicate = 'IsA'
+    AND pred0.conceptnet_predicate = '{transitive_predicate}'
     AND pred0.transitive = true
     AND pred0.allow_predicate_usage = true
     AND t0.inference_depth < {maximum_inference_depth}
@@ -430,6 +509,7 @@ LIMIT {limit}
             context_id=context.id,
             minimum_inference_weight=context.minimum_inference_weight,
             maximum_inference_depth=context.maximum_inference_depth,
+            transitive_predicate=self.transitive_predicate,
             limit=limit,
         )
         #print sql
@@ -529,9 +609,21 @@ LIMIT {limit}
             print "Committed."
         return i
 
+class ContextManager(models.Manager):
+    
+    def get_visible(self, user):
+        q = self.filter(deleted__isnull=True)
+        if user.is_authenticated():
+            return q.filter(Q(owner=user)|Q(accessibility=c.PUBLIC))
+        return q.filter(Q(accessibility=c.PUBLIC))
+
 class Context(BaseModel):
     
+    objects = ContextManager()
+    
     name = models.CharField(max_length=200, blank=False, null=False, default='global')
+    
+    slug = models.SlugField(max_length=500, blank=True, null=True, unique=True)
     
     owner = models.ForeignKey('auth.User', blank=True, null=True)
     
@@ -571,16 +663,25 @@ class Context(BaseModel):
     
     triples = models.ManyToManyField('Triple', related_name='direct_contexts')
     
-    all_triples = models.ManyToManyField('Triple', related_name='contexts')
+    senses = models.ManyToManyField('Sense', related_name='senses_contexts')
+    
+    all_triples = models.ManyToManyField('Triple', related_name='all_triples_contexts')
+    
+    all_senses = models.ManyToManyField('Sense', related_name='all_senses_contexts')
     
     fresh_all_triples = models.BooleanField(default=False)
     
     rules = models.ManyToManyField('InferenceRule', related_name='contexts')
     
+    @property
+    def rule_ids_str(self):
+        return ','.join(str(_.id) for _ in self.rules.all())
+    
     accessibility = models.CharField(
         max_length=25,
         choices=c.ACCESS_CHOICES,
         default=c.PRIVATE,
+        db_index=True,
         blank=False,
         null=False)
     
@@ -588,6 +689,7 @@ class Context(BaseModel):
         max_length=25,
         choices=c.EDIT_CHOICES,
         default=c.OWNER_ONLY,
+        db_index=True,
         blank=False,
         null=False)
     
@@ -595,7 +697,18 @@ class Context(BaseModel):
         unique_together = (
             ('name', 'parent', 'owner'),
         )
-        
+    
+    def allow_editing(self, user):
+        if not user.is_authenticated():
+            return False
+        elif user == self.owner:
+            return True
+        elif self.accessibility == c.PRIVATE:
+            return False
+        elif self.editability == c.EVERYONE:
+            return True
+        return False
+    
     def __unicode__(self):
         if self.parent:
             return u'%s in %s' % (self.name, self.parent.name)
@@ -609,14 +722,37 @@ class Context(BaseModel):
             ret = rule.infer(context=self, *args, **kwargs) or ret
         return ret
     
-    def add_triple(self, t):
-        # Add to direct list.
-        self.triples.add(t)
+    def add_triple(self, t, direct=True):
+        
+        if direct:
+            # Add to direct list.
+            self.triples.add(t)
+            if t.subject:
+                self.senses.add(t.subject)
+#            if t.subject_triple:
+#                self.add_triple(t.subject_triple)
+            self.senses.add(t.predicate)
+            if t.object:
+                self.senses.add(t.object)
+#            if t.object_triple:
+#                self.add_triple(t.object_triple)
+        
         # Add to cached list.
         self.all_triples.add(t)
+        if t.subject:
+            self.all_senses.add(t.subject)
+        self.all_senses.add(t.predicate)
+        if t.object:
+            self.all_senses.add(t.object)
+        
         # Add to all parents cached list.
         if self.top_parent:
             self.top_parent.all_triples.add(t)
+            if t.subject:
+                self.top_parent.all_senses.add(t.subject)
+            self.top_parent.all_senses.add(t.predicate)
+            if t.object:
+                self.top_parent.all_senses.add(t.object)
             self.top_parent.clear_caches()
         self.clear_caches()
         
@@ -720,6 +856,9 @@ class Context(BaseModel):
         
         self.missing_truth_value = min(max(self.missing_truth_value, c.NO), c.YES)
         
+        if self.accessibility not in c.ACCESS_CHOICES:
+            self.accessibility = c.PRIVATE
+        
         if self.id:
             old = type(self).objects.get(id=self.id)
             if old.parent != self.parent:
@@ -746,19 +885,118 @@ class TripleManager(models.Manager):
             q = self
         return self.active(q=self.real(q=q))
 
+class TripleInference(BaseModel):
+    """
+    Represents an inference rule deriving a triple given
+    other triples as arguments.
+    """
+    
+    inferred_triple = models.ForeignKey(
+        'Triple',
+        related_name='inferences',
+        verbose_name='triple',
+        help_text='The triple that was inferred from the rule given the arguments.')
+    
+    inference_rule = models.ForeignKey(
+        'InferenceRule',
+        blank=True,
+        null=True,
+        verbose_name='rule',
+        help_text='''The rule used to infer this triple.''')
+    
+    inference_arguments = models.ManyToManyField(
+        'Triple',
+        blank=True,
+        null=True,
+        #related_name='inferences',
+        verbose_name='arguments',
+        help_text='''The triples used by the inference rule
+            to infer this triple.''')
+
+    inference_arguments_cache = models.CharField(
+        max_length=700,
+        editable=False,
+        blank=True,
+        null=True)
+
+    inferred_weight = models.FloatField(
+        blank=True,
+        editable=False,
+        db_index=True,
+        null=True,
+        help_text='''A number between [0...1] representing the relative
+            probability or certainty of this triple being true, used only
+            for inferred triples that have no votes.''')
+    
+    confirmed = models.NullBooleanField(
+        #editable=False,
+        help_text='''If not unknown, indicates the query associated with
+            the rule confirmed the association is true or false.''')
+    
+    class Meta:
+        unique_together = (
+            ('inferred_triple', 'inference_rule', 'inference_arguments_cache'),
+        )
+    
+    @classmethod
+    def get_hash(cls, *args):
+        return hashlib.sha512(pickle.dumps(tuple(_.id for _ in sorted(args, key=lambda o:o.id)))).hexdigest()
+    
+    @classmethod
+    def get_or_create(cls, rule, arguments, triple):
+        assert isinstance(arguments, (list, tuple))
+        assert isinstance(rule, InferenceRule)
+        assert isinstance(triple, Triple)
+        print 'arguments:',arguments
+        arguments_hash = cls.get_hash(*list(arguments))
+        print 'arguments_hash:',arguments_hash
+        o, created = cls.objects.get_or_create(
+            inferred_triple=triple,
+            inference_rule=rule,
+            inference_arguments_cache=arguments_hash)
+        o.save()
+        #django.db.transaction.commit()
+        print 'arguments:',arguments
+        o.inference_arguments.add(*arguments)
+        return o, created
+    
+    def save(self, *args, **kwargs):
+        if self.id and self.inference_arguments.all().count():
+            self.inference_arguments_cache = type(self).get_hash(*list(self.inference_arguments.all()))
+        super(TripleInference, self).save(*args, **kwargs)
+    
 class Triple(BaseModel):
     
     objects = TripleManager()
     
+    owner = models.ForeignKey('auth.User', blank=True, null=True)
+    
     #context = models.ForeignKey(Context, related_name='triples')
     
-    subject = models.ForeignKey(Sense, related_name='subject_triples')
+    subject = models.ForeignKey(Sense, related_name='subject_triples', blank=True, null=True)
+    
+    subject_triple = models.ForeignKey('self', related_name='subject_triple_triples', blank=True, null=True)
     
     predicate = models.ForeignKey(Sense, related_name='predicate_triples')
     
     object = models.ForeignKey(Sense, blank=True, null=True, related_name='object_triples')
     
-    po_hash = models.CharField(max_length=700, blank=True, null=True, db_index=True)
+    object_triple = models.ForeignKey('self', blank=True, null=True, related_name='object_triple_triples')
+    
+    _text = models.TextField(
+        blank=True,
+        null=True,
+        db_column='text',
+        editable=False,
+        help_text='''The cached value of the word text from the subject,
+            predicate and object.''')
+    
+    po_hash = models.CharField(
+        max_length=700,
+        blank=True,
+        null=True,
+        editable=False,
+        db_index=True)
     
     conceptnet_uri = models.URLField(max_length=700, blank=True, null=True, db_index=True)
     
@@ -847,13 +1085,27 @@ class Triple(BaseModel):
             the subject have been propagated. Otherwise, implies inferred
             triples need to be created, updated, or deleted.''')
     
+    search_index = VectorField()
+
+    search_objects = SearchManager(
+        fields = (
+            '_text',
+        ),
+        config = 'pg_catalog.english', # this is default
+        search_field = 'search_index', # this is default
+        auto_update_search_field = True
+    )
+    
     class Meta:
         unique_together = (
-            ('subject', 'predicate', 'object'),
+            ('subject', 'subject_triple', 'predicate', 'object', 'object_triple', 'owner'),
         )
         index_together = (
-            ('predicate', 'object'),
+            ('predicate', 'object', 'object_triple'),
             ('inferred', 'deleted'),
+        )
+        ordering = (
+            '_text',
         )
     
     def __unicode__(self):
@@ -862,6 +1114,80 @@ class Triple(BaseModel):
     
     def __repr__(self):
         return unicode(self)
+    
+    def text(self, recheck=False):
+        if not self._text or recheck:
+            parts = []
+            if self.subject:
+                parts.append(self.subject.word.text)
+            elif self.subject_triple:
+                parts.append(self.subject_triple.text(recheck=recheck))
+                
+            if self.predicate:
+                parts.append(self.predicate.word.text)
+                
+            if self.object:
+                parts.append(self.object.word.text)
+            elif self.subject_triple:
+                parts.append(self.object_triple.text(recheck=recheck))
+            self._text = u' '.join(parts)
+        return self._text
+    
+    def text_sentence(self):
+        text = self.text().strip()
+        text = text[0].upper() + text[1:] + '.'
+        return text
+    
+    def subject_text(self):
+        if self.subject:
+            text = self.subject.word.text
+        else:
+            text = self.subject_triple.text()
+        return text[0].upper() + text[1:]
+    
+    def predicate_text(self):
+        text = self.predicate.word.text
+        return text
+    
+    def object_text(self):
+        if self.object:
+            text = self.object.word.text
+        else:
+            text = self.object_triple.text()
+        return text + '.'
+    
+    def subject_text_raw(self):
+        if self.subject:
+            return self.subject.word.text
+        else:
+            return self.subject_triple.text()
+    
+    def predicate_text_raw(self):
+        return self.predicate.word.text
+    
+    def object_text_raw(self):
+        if self.object:
+            return self.object.word.text
+        else:
+            return self.object_triple.text()
+    
+    def subject_common_id(self):
+        if self.subject:
+            return 'sense:%i' % (self.subject.id,)
+        elif self.subject_triple:
+            return 'triple:%i' % (self.subject_triple.id,)
+    
+    def predicate_common_id(self):
+        if self.predicate:
+            ret = 'sense:%i' % (self.predicate.id,)
+            print 'ret:',ret
+            return ret
+    
+    def object_common_id(self):
+        if self.object:
+            return 'sense:%i' % (self.object.id,)
+        elif self.object_triple:
+            return 'triple:%i' % (self.object_triple.id,)
     
     @property
     def effective_weight(self):
@@ -888,7 +1214,12 @@ class Triple(BaseModel):
                 pre = 'few'
             else:
                 pre = 'no'
-            return u'%s %s %s %s' % (pre, self.subject.word.text, self.predicate.word.text, (self.object and self.object.word.text) or '')
+            return u'%s %s %s %s' % (
+                pre,
+                (self.subject and self.subject.word.text) or (self.subject_triple and self.subject_triple.natural_reading()) or '',
+                self.predicate.word.text,
+                (self.object and self.object.word.text) or (self.object_triple and self.object_triple.natural_reading()) or '',
+            )
         elif format == format2:
             weight = self.effective_weight or 0.0 #self.contexts.all()[0].missing_truth_value
             if weight > (c.YES - c.MAYBE)/2.:
@@ -899,7 +1230,12 @@ class Triple(BaseModel):
                 pre = 'few'
             else:
                 pre = 'no'
-            return u'%s %s %s %s' % (self.subject.word.text, pre, self.predicate.word.text, (self.object and self.object.word.text) or '')
+            return u'%s %s %s %s' % (
+                (self.subject and self.subject.word.text) or (self.subject_triple and self.subject_triple.natural_reading()) or '',
+                pre,
+                self.predicate.word.text,
+                (self.object and self.object.word.text) or (self.object_triple and self.object_triple.natural_reading()) or '',
+            )
     
     def save(self, *args, **kwargs):
         
@@ -914,6 +1250,10 @@ class Triple(BaseModel):
         else:
             self.weight = None
         
+        # Ensure a triple part can't have both a sense and sub-triple.
+        assert (self.subject and not self.subject_triple) or (not self.subject and self.subject_triple)
+        assert (self.object and not self.object_triple) or (not self.object and self.object_triple) or (not self.object and not self.object_triple)
+        
         try:
             self.log_prob = math.log(self.weight)
         except TypeError:
@@ -923,17 +1263,28 @@ class Triple(BaseModel):
         
         old = Triple.objects.get(id=self.id) if self.id else None
         if not self.id or not self.po_hash or (self.id and (self.predicate != old.predicate or self.object != old.object)):
-            self.po_hash = po_to_hash(self.predicate, self.object)
+            print 'po_hash:',self.predicate, self.object, self.object_triple
+            self.po_hash = po_to_hash(self.predicate, self.object, self.object_triple)
         
         new = False
         if self.id:
-            self.total_contexts = self.contexts.all().count()
+            self.total_contexts = self.all_triples_contexts.all().count()
+            
+            # If we edit the argument of an inference, then mark that inference
+            # as unconfirmed, since the change in input may have effected the
+            # output.
+            if old.subject != self.subject or old.subject_triple != self.subject_triple \
+            or old.predicate != self.predicate \
+            or old.object != self.object or old.object_triple != self.object_triple:
+                TripleInference.objects.filter(inference_arguments__id=self.id).update(confirmed=None)
             
             if old.deleted != self.deleted:
-                for ctx in self.contexts.all():
+                for ctx in self.all_triples_contexts.all():
                     ctx.clear_caches()
         else:
             new = True
+            
+        self.text(recheck=True)
         
         super(Triple, self).save(*args, **kwargs)
         
@@ -941,11 +1292,12 @@ class Triple(BaseModel):
         PredicateObjectIndex.objects.filter(
             predicate=self.predicate,
             object=self.object,
-            context__in=self.contexts.all(),
+            #context__in=self.contexts.all(),
+            context__in=self.all_triples_contexts.all(),
         ).update(fresh=False)
         
         if new:
-            for ctx in self.contexts.all():
+            for ctx in self.all_triples_contexts.all():
                 ctx.clear_caches()
 
 class BaseTripleVote(BaseModel):
@@ -1177,7 +1529,7 @@ class PredicateObjectIndex(BaseModel):
         
         old = type(self).objects.get(id=self.id) if self.id else None
         if not self.id or not self.po_hash or (self.id and (self.predicate != old.predicate or self.object != old.object)):
-            self.po_hash = po_to_hash(self.predicate, self.object)
+            self.po_hash = po_to_hash(self.predicate, self.object, self.object_triple)
         
         if self.id and check_best_splitter:
             # Check for best splitter by entropy at this node.

@@ -127,18 +127,22 @@ HAS_SINGULAR = 'has singular'
 ISPARTOF = 'is part of'
 
 RULE_ISA = 'ISA'
+RULE_BECAUSE_OF_REL = 'BECAUSEOFREL'
 RULE_CHOICES = (
     (RULE_ISA, 'ISA'),
+    (RULE_BECAUSE_OF_REL, 'BECAUSE OF RELATES TO'),
 )
 
 PUBLIC = 'public'
-PRIVATE = 'private',
+PRIVATE = 'private'
 ACCESS_CHOICES = (
     (PUBLIC, 'public'),
     (PRIVATE, 'private'),
 )
 
 OWNER_ONLY = 'owner-only'
+EVERYONE = 'everyone'
 EDIT_CHOICES = (
     (OWNER_ONLY, 'owner-only'),
+    (EVERYONE, 'everyone'),
 )
