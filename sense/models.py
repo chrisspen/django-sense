@@ -937,6 +937,9 @@ class TripleInference(BaseModel):
         unique_together = (
             ('inferred_triple', 'inference_rule', 'inference_arguments_cache'),
         )
+        ordering = (
+            '-inferred_weight',
+        )
     
     @classmethod
     def get_hash(cls, *args):
@@ -965,7 +968,92 @@ class TripleInference(BaseModel):
             self.inference_arguments_cache = type(self).get_hash(*list(self.inference_arguments.all()))
         super(TripleInference, self).save(*args, **kwargs)
     
+class TripleFlow(BaseModel):
+    """
+    Represents a visual ordering of triples.
+    """
+    
+    context = models.ForeignKey('Context', related_name='flows')
+    
+    parent = models.ForeignKey('self', blank=True, null=True, related_name='flows')
+    
+    triple = models.ForeignKey('Triple', blank=False, null=False, related_name='flows')
+    
+    index = models.PositiveIntegerField(
+        default=0, db_index=True, blank=True, null=True,
+        help_text='''The list order of this flow node at the current level
+            in the tree.''')
+    
+    depth = models.PositiveIntegerField(
+        default=0, blank=False, null=False, db_index=True)
+                                        
+    rindex = models.PositiveIntegerField(
+        db_index=True,
+        blank=True,
+        null=True,
+        help_text='''The global order of this triple showing leaf-nodes first
+            ascending to the top-most parent node.<br/>
+            e.g. the top-most parent should have the highest value and the
+            lowest child should have 0.''')
+    
+    class Meta:
+        index_together = (
+            #('context', 'triple', 'index'),
+        )
+        unique_together = (
+            ('context', 'parent', 'index'),
+        )
+        ordering = ('context', 'rindex')
+    
+    def __unicode__(self):
+        return unicode(self.triple)
+    
+    @classmethod
+    def calculate_flow(cls, context, **kwargs):
+        '''
+        Automatically generates flow records for a context.
+        '''
+        try:
+            goal = TripleFlow.objects.get(context=context, index=0, parent=None, deleted__isnull=True)
+        except TripleFlow.DoesNotExist:
+            print 'No goal set.'
+            return
+        # Clear old flow.
+        TripleFlow.objects.filter(context=context).exclude(id__in=[goal.id]).update(deleted=timezone.now())
+        print 'Goal:',goal
+        
+        def build_flow_top_down(node, prior=None, max_rindex=-1, depth=0):
+            if prior is None:
+                prior = set()
+            if node not in prior:
+                prior.add(node)
+                q = node.triple.inferences.all()
+                if q.count():
+                    inference = q[0]
+                    previous_index = 0
+                    for argument in inference.inference_arguments.all():
+                        next_node, _ = cls.objects.get_or_create(
+                            context=context,
+                            parent=node,
+                            triple=argument,
+                            index=previous_index)
+                        next_node.deleted = None
+                        next_node.depth = depth + 1
+                        previous_index += 1
+                        new_max_rindex = build_flow_top_down(node=next_node, prior=prior, max_rindex=max_rindex, depth=depth+1)
+                        max_rindex = max(max_rindex, new_max_rindex)
+                        max_rindex = next_node.rindex = max_rindex + 1
+                        next_node.save()
+            return max_rindex
+            
+        max_rindex = build_flow_top_down(goal)
+        goal.rindex = max_rindex + 1
+        goal.save()
+    
 class Triple(BaseModel):
+    """
+    A simple trinary association of data.
+    """
     
     objects = TripleManager()
     
@@ -1114,6 +1202,14 @@ class Triple(BaseModel):
     
     def __repr__(self):
         return unicode(self)
+    
+    def has_top_flow(self, context):
+        return self.flows.filter(context=context, index=0, deleted__isnull=True).count() > 0
+    
+    def get_top_flow(self, context):
+        q = self.flows.filter(context=context, index=0, deleted__isnull=True)
+        if q.count():
+            return q[0]
     
     def text(self, recheck=False):
         if not self._text or recheck:

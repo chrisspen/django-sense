@@ -286,6 +286,54 @@ class ContextAdmin(
     
 admin.site.register(models.Context, ContextAdmin)
 
+class TripleFlowAdmin(
+    admin_steroids.BetterRawIdFieldsModelAdmin,
+    admin_steroids.FormatterModelAdmin):
+    
+    list_display = (
+        'id',
+        'context',
+        'parent_str',
+        'triple_str',
+        'index',
+        'rindex',
+        'depth',
+        'deleted',
+    )
+    list_filter = (
+        ('deleted', NullListFilter),
+    )
+    
+    raw_id_fields = (
+        'context',
+        'parent',
+        'triple',
+    )
+    readonly_fields = (
+        'parent_str',
+        'triple_str',
+    )
+    
+    def parent_str(self, obj=None):
+        if not obj or not obj.parent:
+            return ''
+        s = obj.parent.triple.text().strip()
+        if len(s) > 50:
+            s = s[:47] + '...'
+        return '%i: %s' % (obj.parent.triple.id, s)
+    parent_str.short_description = 'parent'
+    
+    def triple_str(self, obj=None):
+        if not obj:
+            return ''
+        s = obj.triple.text().strip()
+        if len(s) > 100:
+            s = s[:(100-3)] + '...'
+        return '%i: %s' % (obj.triple.id, s)
+    triple_str.short_description = 'triple'
+    
+admin.site.register(models.TripleFlow, TripleFlowAdmin)
+
 class TripleAdmin(
     admin_steroids.BetterRawIdFieldsModelAdmin,
     admin_steroids.FormatterModelAdmin):
