@@ -200,6 +200,10 @@ class Word(BaseModel):
         blank=False,
         null=False)
     
+    text_length = models.PositiveIntegerField(
+        default=0,
+        editable=False)
+    
     wiktionary_id = models.CharField(
         max_length=700,
         blank=True,
@@ -230,6 +234,8 @@ class Word(BaseModel):
     
     def save(self, *args, **kwargs):
         
+        self.text = (self.text or '').strip()
+        self.text_length = len(self.text)
         self.sense_count = self.senses.all().count()
         
         super(Word, self).save(*args, **kwargs)

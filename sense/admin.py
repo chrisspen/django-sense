@@ -74,6 +74,7 @@ class WordAdmin(admin.ModelAdmin):
         'id',
         'text',
         'sense_count',
+        'text_length',
         'created',
     )
     list_filter = (
@@ -86,6 +87,7 @@ class WordAdmin(admin.ModelAdmin):
     readonly_fields = (
         'senses_link',
         'sense_count',
+        'text_length',
         'wiktionary_link',
         #'subject_triples_link',
     )
@@ -131,7 +133,7 @@ class SenseExampleInline(admin.TabularInline):
         return list(self.readonly_fields) + [f.name for f in self.model._meta.fields]
     
 class SenseAdmin(
-    admin_steroids.BetterRawIdFieldsModelAdmin):
+    admin_steroids.options.BetterRawIdFieldsModelAdmin):
     search_fields = (
         'word__text',
     )
@@ -224,8 +226,8 @@ class SenseAdmin(
 admin.site.register(models.Sense, SenseAdmin)
     
 class ContextAdmin(
-    admin_steroids.BetterRawIdFieldsModelAdmin,
-    admin_steroids.FormatterModelAdmin):
+    admin_steroids.options.BetterRawIdFieldsModelAdmin,
+    admin_steroids.options.FormatterModelAdmin):
     
     search_fields = (
         'name',
@@ -287,8 +289,8 @@ class ContextAdmin(
 admin.site.register(models.Context, ContextAdmin)
 
 class TripleFlowAdmin(
-    admin_steroids.BetterRawIdFieldsModelAdmin,
-    admin_steroids.FormatterModelAdmin):
+    admin_steroids.options.BetterRawIdFieldsModelAdmin,
+    admin_steroids.options.FormatterModelAdmin):
     
     list_display = (
         'id',
@@ -335,8 +337,8 @@ class TripleFlowAdmin(
 admin.site.register(models.TripleFlow, TripleFlowAdmin)
 
 class TripleAdmin(
-    admin_steroids.BetterRawIdFieldsModelAdmin,
-    admin_steroids.FormatterModelAdmin):
+    admin_steroids.options.BetterRawIdFieldsModelAdmin,
+    admin_steroids.options.FormatterModelAdmin):
     
     search_fields = (
         'subject__word__text',
@@ -435,8 +437,8 @@ class TripleAdmin(
 admin.site.register(models.Triple, TripleAdmin)
 
 class PredicateObjectIndexAdmin(
-    admin_steroids.BetterRawIdFieldsModelAdmin,
-    admin_steroids.FormatterModelAdmin):
+    admin_steroids.options.BetterRawIdFieldsModelAdmin,
+    admin_steroids.options.FormatterModelAdmin):
     
     list_display = (
         'id',
@@ -521,7 +523,7 @@ class InferenceRuleAdmin(admin.ModelAdmin):
 admin.site.register(models.InferenceRule, InferenceRuleAdmin)
 
 class TripleInferenceAdmin(
-    admin_steroids.BetterRawIdFieldsModelAdmin):
+    admin_steroids.options.BetterRawIdFieldsModelAdmin):
     
     list_display = (
         'id',
